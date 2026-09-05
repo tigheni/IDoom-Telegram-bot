@@ -1,0 +1,21 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "idoom-bot",
+	"main": "src/index.js",
+	"compatibility_date": "2026-09-03",
+
+	"observability": {
+		"enabled": true,
+	},
+
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "idoom-bot-db",
+			"database_id": "5a904caa-6129-462c-8b86-3de6016e2876",
+		},
+	],
+	"triggers": {
+		"crons": ["*/5 * * * *"],
+	},
+}

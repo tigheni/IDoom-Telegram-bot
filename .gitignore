@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+
+idoom_bot.db
+bot_state.json
+
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/.dev.vars
