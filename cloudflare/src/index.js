@@ -183,6 +183,14 @@ function mergeCookies(...cookieLists) {
 // Algérie Télécom login + expiry
 // ============================================================
 
+function httpError(message, status) {
+	const error = new Error(message);
+
+	error.status = status;
+
+	return error;
+}
+
 function extractCsrfToken(html) {
 	const match = html.match(/<input[^>]+name=["']_token["'][^>]+value=["']([^"']+)["']/i);
 
@@ -249,7 +257,7 @@ async function getAtExpiration(nd, password) {
 	});
 
 	if (!loginPage.ok && loginPage.status !== 302) {
-		throw new Error(`AT login page failed: ${loginPage.status}`);
+		throw httpError(`AT login page failed: ${loginPage.status}`, loginPage.status);
 	}
 
 	const loginHtml = await loginPage.text();
@@ -282,7 +290,7 @@ async function getAtExpiration(nd, password) {
 	if (loginResponse.status !== 301 && loginResponse.status !== 302 && loginResponse.status !== 303) {
 		const loginText = await loginResponse.text();
 
-		throw new Error(`Algérie Télécom login failed: ` + `${loginResponse.status} ` + loginText.slice(0, 300));
+		throw httpError(`Algérie Télécom login failed: ${loginResponse.status} ${loginText.slice(0, 300)}`, loginResponse.status);
 	}
 
 	const postLoginCookies = cookiePairsFromResponse(loginResponse);
@@ -305,7 +313,7 @@ async function getAtExpiration(nd, password) {
 	if (homeResponse.status !== 200) {
 		const homeText = await homeResponse.text();
 
-		throw new Error(`Could not access AT customer page: ` + `${homeResponse.status} ` + homeText.slice(0, 300));
+		throw httpError(`Could not access AT customer page: ${homeResponse.status} ${homeText.slice(0, 300)}`, homeResponse.status);
 	}
 
 	const html = await homeResponse.text();
@@ -313,6 +321,29 @@ async function getAtExpiration(nd, password) {
 	const displayedExpiration = extractDisplayedExpiration(html);
 
 	return expirationDateToUtc(displayedExpiration);
+}
+
+async function withRetry(fn, attempts = 3) {
+	let lastError;
+
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			return await fn();
+		} catch (error) {
+			lastError = error;
+
+			// 4xx / redirects mean bad credentials, retrying could lock the account.
+			if (error.status && error.status < 500) {
+				throw error;
+			}
+
+			if (attempt < attempts) {
+				await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+			}
+		}
+	}
+
+	throw lastError;
 }
 
 // ============================================================
@@ -552,7 +583,7 @@ async function handlePassword(env, message) {
 	await sendTelegramMessage(env, chatId, '🔐 Checking your Algérie Télécom account...');
 
 	try {
-		const expiration = await getAtExpiration(session.idoom_number, password);
+		const expiration = await withRetry(() => getAtExpiration(session.idoom_number, password));
 
 		const encryptedPassword = await encryptPassword(env, password);
 
@@ -598,7 +629,7 @@ async function sendStatus(env, chatId) {
 	try {
 		const password = await decryptPassword(env, user.encrypted_password);
 
-		const expiration = await getAtExpiration(user.idoom_number, password);
+		const expiration = await withRetry(() => getAtExpiration(user.idoom_number, password));
 
 		await updateExpiration(env, chatId, expiration.toISOString());
 
@@ -642,7 +673,7 @@ async function checkUserAutomatically(env, user) {
 	try {
 		const password = await decryptPassword(env, user.encrypted_password);
 
-		const expiration = await getAtExpiration(user.idoom_number, password);
+		const expiration = await withRetry(() => getAtExpiration(user.idoom_number, password));
 
 		const expirationIso = expiration.toISOString();
 
@@ -727,6 +758,10 @@ export default {
 
 		// Telegram webhook
 		if (request.method === 'POST' && url.pathname === '/telegram') {
+			if (env.TELEGRAM_WEBHOOK_SECRET && request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.TELEGRAM_WEBHOOK_SECRET) {
+				return new Response('Unauthorized', { status: 401 });
+			}
+
 			let update;
 
 			try {
